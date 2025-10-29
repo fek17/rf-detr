@@ -2,7 +2,49 @@
 
 This guide explains how to use RF-DETR to detect parking lots and vehicles in satellite imagery.
 
+## 🎯 Recommended Approach: Use Segmentation!
+
+**For the most accurate parking lot detection, use the segmentation model** (`parking_lot_segmentation_detector.py`). Segmentation provides pixel-level masks instead of just bounding boxes, which is much better for identifying parking lot regions and boundaries.
+
+### Why Segmentation is Better:
+- ✅ **Pixel-perfect boundaries** - Get exact parking lot outlines, not just boxes
+- ✅ **Accurate area calculations** - Calculate precise parking lot sizes
+- ✅ **Better for regions** - Identify large parking lot areas, not just individual cars
+- ✅ **Mask overlap analysis** - Understand parking space usage better
+- ✅ **Works great in Roboflow Playground** - As you've experienced!
+
+### Quick Start with Segmentation:
+
+```bash
+# Basic usage - detects with pixel-level masks
+python parking_lot_segmentation_detector.py satellite_image.jpg -o output/
+
+# Try the interactive example
+python example_parking_segmentation.py satellite_image.jpg
+
+# With statistics and mask extraction
+python parking_lot_segmentation_detector.py image.jpg -o output/ --stats --extract-masks
+```
+
+See the [Segmentation Section](#segmentation-based-detection) below for detailed usage.
+
+---
+
 ## Overview
+
+We provide two approaches for parking lot detection:
+
+1. **Segmentation-based** (`parking_lot_segmentation_detector.py`) - **RECOMMENDED**
+   - Uses RF-DETR-Seg model with pixel-level masks
+   - Better for identifying parking lot regions and boundaries
+   - Accurate area calculations
+
+2. **Detection-based** (`parking_lot_detector.py`) - Faster, simpler
+   - Uses bounding boxes only
+   - Good for counting vehicles
+   - Faster inference
+
+### Detection-Only Features
 
 The `parking_lot_detector.py` script provides an easy-to-use interface for detecting parking lots in satellite images. It supports:
 
@@ -104,6 +146,219 @@ for img_path, detections in zip(image_paths, detections_list):
 
     print(f"{img_path.name}: {len(detections)} vehicles detected")
 ```
+
+## Segmentation-Based Detection
+
+The segmentation model (RF-DETR-Seg-Preview) provides pixel-level masks for much more accurate parking lot detection compared to bounding boxes alone.
+
+### Why Use Segmentation?
+
+**Problem with bounding boxes:**  Rectangular boxes don't capture the actual shape of parking lots, which can be L-shaped, curved, or irregular. You get lots of "empty" space in the box that isn't actually part of the parking lot.
+
+**Solution with segmentation:** Pixel-perfect masks that follow the exact outline of parking lots, vehicles, and parking spaces.
+
+### Basic Usage
+
+```python
+from parking_lot_segmentation_detector import ParkingLotSegmentationDetector
+from PIL import Image
+
+# Initialize with segmentation model
+detector = ParkingLotSegmentationDetector(
+    use_segmentation=True,  # Enable segmentation
+    model_size="seg-preview",  # Segmentation model
+    threshold=0.5
+)
+
+# Detect with masks
+image = Image.open("satellite_parking.jpg")
+detections = detector.detect(image)
+
+# Detections now include pixel-level masks
+print(f"Found {len(detections)} objects")
+print(f"Masks shape: {detections.mask.shape}")  # (N, H, W) - one mask per detection
+
+# Visualize with masks
+annotated = detector.annotate_image(
+    image,
+    detections,
+    show_masks=True,  # Show segmentation masks
+    mask_opacity=0.5
+)
+```
+
+### Command-Line Usage
+
+```bash
+# Basic segmentation
+python parking_lot_segmentation_detector.py satellite_image.jpg -o output/
+
+# With statistics
+python parking_lot_segmentation_detector.py image.jpg -o output/ --stats
+
+# Extract individual masks as separate images
+python parking_lot_segmentation_detector.py image.jpg -o output/ --extract-masks
+
+# Adjust mask opacity
+python parking_lot_segmentation_detector.py image.jpg -o output/ --mask-opacity 0.7
+
+# Process directory
+python parking_lot_segmentation_detector.py images/ -o output/ --stats --extract-masks
+```
+
+### Calculate Parking Lot Areas
+
+```python
+from parking_lot_segmentation_detector import ParkingLotSegmentationDetector
+from PIL import Image
+
+detector = ParkingLotSegmentationDetector(use_segmentation=True)
+
+image = Image.open("satellite_parking.jpg")
+detections = detector.detect(image)
+
+# Calculate area statistics
+area_stats = detector.calculate_parking_area(
+    detections,
+    image_size=image.size,
+    pixel_to_meter_ratio=0.5  # Optional: 0.5 meters per pixel
+)
+
+print(f"Total parking area: {area_stats['total_parking_area_pixels']:,} pixels")
+print(f"Coverage: {area_stats['parking_coverage_percentage']:.1f}% of image")
+
+if 'total_parking_area_sq_meters' in area_stats:
+    print(f"Area: {area_stats['total_parking_area_sq_meters']:.0f} square meters")
+```
+
+### Extract and Analyze Individual Masks
+
+```python
+from parking_lot_segmentation_detector import ParkingLotSegmentationDetector
+from PIL import Image
+import numpy as np
+
+detector = ParkingLotSegmentationDetector(use_segmentation=True)
+
+image = Image.open("satellite_parking.jpg")
+detections = detector.detect(image)
+
+# Extract masks as separate images
+mask_paths = detector.extract_masks_as_images(
+    image,
+    detections,
+    output_dir="output/masks"
+)
+print(f"Saved {len(mask_paths)} mask images")
+
+# Analyze each mask
+for i, mask in enumerate(detections.mask):
+    area = np.sum(mask)  # Number of pixels in mask
+    bbox = detections.xyxy[i]
+    class_id = detections.class_id[i]
+
+    # Calculate how much of bounding box is actual object
+    bbox_area = (bbox[2] - bbox[0]) * (bbox[3] - bbox[1])
+    fill_ratio = area / bbox_area
+
+    print(f"Object {i}: {COCO_CLASSES[class_id]}")
+    print(f"  Mask area: {area:,} pixels")
+    print(f"  BBox area: {bbox_area:.0f} pixels")
+    print(f"  Fill ratio: {fill_ratio:.1%}")
+```
+
+### Comparison Visualization
+
+The example script shows a 4-panel comparison:
+
+```bash
+python example_parking_segmentation.py satellite_image.jpg
+```
+
+This creates:
+1. Original image
+2. Bounding boxes only
+3. Segmentation masks only
+4. Combined (boxes + masks)
+
+### Advanced: Combine Multiple Masks
+
+```python
+import numpy as np
+from parking_lot_segmentation_detector import ParkingLotSegmentationDetector
+from PIL import Image
+
+detector = ParkingLotSegmentationDetector(use_segmentation=True)
+
+image = Image.open("satellite_parking.jpg")
+detections = detector.detect(image)
+
+# Create combined mask of all parking lot regions
+combined_mask = np.zeros(detections.mask[0].shape, dtype=bool)
+for mask in detections.mask:
+    combined_mask = combined_mask | mask  # Union of all masks
+
+# Calculate total parking lot area
+total_area = np.sum(combined_mask)
+print(f"Total parking lot area: {total_area:,} pixels")
+
+# Visualize combined mask
+combined_mask_image = np.zeros((*combined_mask.shape, 3), dtype=np.uint8)
+combined_mask_image[combined_mask] = [255, 0, 0]  # Red for parking areas
+
+# Overlay on original
+import cv2
+overlay = cv2.addWeighted(np.array(image), 0.7, combined_mask_image, 0.3, 0)
+Image.fromarray(overlay).save("parking_lot_overlay.jpg")
+```
+
+### Segmentation Statistics
+
+```python
+detector = ParkingLotSegmentationDetector(use_segmentation=True)
+detections = detector.detect("satellite_parking.jpg")
+
+stats = detector.get_statistics(detections)
+
+# Regular detection stats
+print(f"Total detections: {stats['total_detections']}")
+print(f"Average confidence: {stats['avg_confidence']:.2f}")
+
+# Segmentation-specific stats
+if 'segmentation' in stats:
+    seg = stats['segmentation']
+    print(f"\nSegmentation Stats:")
+    print(f"  Total mask area: {seg['total_mask_area']:,} pixels")
+    print(f"  Average mask area: {seg['avg_mask_area']:.0f} pixels")
+    print(f"  Coverage: {seg['total_coverage_percentage']:.2f}%")
+
+    # Individual mask areas
+    for i, area in enumerate(seg['mask_areas']):
+        print(f"  Object {i}: {area:,} pixels")
+```
+
+### Tips for Segmentation
+
+1. **Better than boxes for:**
+   - Irregular parking lot shapes
+   - Calculating accurate areas
+   - Identifying exact boundaries
+   - Analyzing parking space layout
+
+2. **Visualization tips:**
+   - Use `mask_opacity=0.5` for balanced visibility
+   - Set `mask_opacity=0.7` to emphasize masks
+   - Use `show_masks=False` to see just bounding boxes
+
+3. **Performance:**
+   - Segmentation is slightly slower than detection-only
+   - Still real-time capable (~10-30 FPS depending on model)
+   - Enable optimization for best performance
+
+4. **Fine-tuning:**
+   - Same fine-tuning process as detection model
+   - Add segmentation annotations to your dataset
+   - Model learns both boxes and pixel-level masks
 
 ## Fine-tuning for Parking Lot Detection
 
